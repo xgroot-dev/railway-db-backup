@@ -1,14 +1,10 @@
 import { exec } from "child_process";
-import { PutObjectCommand, S3Client, S3ClientConfig } from "@aws-sdk/client-s3";
+import { ListObjectsCommand, DeleteObjectCommand, PutObjectCommand, S3Client, S3ClientConfig } from "@aws-sdk/client-s3";
 import { createReadStream, unlink } from "fs";
 
 import { env } from "./env";
 
-const uploadToS3 = async ({ name, path }: {name: string, path: string}) => {
-  console.log("Uploading backup to S3...");
-
-  const bucket = env.AWS_S3_BUCKET;
-
+const s3Client = () => {
   const clientOptions: S3ClientConfig = {
     region: env.AWS_S3_REGION,
   }
@@ -18,8 +14,13 @@ const uploadToS3 = async ({ name, path }: {name: string, path: string}) => {
     clientOptions['endpoint'] = env.AWS_S3_ENDPOINT;
   }
 
-  const client = new S3Client(clientOptions);
+  return new S3Client(clientOptions);
+}
 
+const uploadToS3 = async ({ name, path }: {name: string, path: string}) => {
+  console.log("Uploading backup to S3...");
+  const bucket = env.AWS_S3_BUCKET;
+  const client = s3Client()
   await client.send(
     new PutObjectCommand({
       Bucket: bucket,
@@ -27,7 +28,6 @@ const uploadToS3 = async ({ name, path }: {name: string, path: string}) => {
       Body: createReadStream(path),
     })
   )
-
   console.log("Backup uploaded to S3...");
 }
 
@@ -62,6 +62,34 @@ const deleteFile = async (path: string) => {
   })
 }
 
+const cleanupOldBackups = async () => {
+  console.log("Cleaning up old backups...");
+  const bucket = env.AWS_S3_BUCKET;
+  const filesToKeep = env.KEEP_BACKUPS || 5
+  const client = s3Client()
+  const listResponse = await client.send(
+    new ListObjectsCommand({Bucket: bucket, MaxKeys: 100})
+  )
+  if (listResponse.Contents && listResponse.Contents.length > filesToKeep) {
+    const sortedContents = listResponse.Contents.sort((a, b) => {
+      if (a.LastModified && b.LastModified) {
+        return a.LastModified.getTime() - b.LastModified.getTime()
+      }
+      return 0
+    })
+    const filesToDelete = sortedContents.slice(0, listResponse.Contents.length - filesToKeep)
+    filesToDelete.forEach(async (file) => {
+      await client.send(
+        new DeleteObjectCommand({Bucket: bucket, Key: file.Key})
+      )
+      console.log(`Deleted old backup: ${file.Key}`)
+    })
+  } else if (listResponse.Contents) {
+    console.log(`No old backups to delete (found ${listResponse.Contents.length}).`)
+  }
+  console.log("Cleanup complete.");
+}
+
 export const backup = async () => {
   console.log("Initiating DB backup...")
 
@@ -73,6 +101,7 @@ export const backup = async () => {
   await dumpToFile(filepath)
   await uploadToS3({name: filename, path: filepath})
   await deleteFile(filepath)
+  await cleanupOldBackups()
 
   console.log("DB backup complete...")
 }
