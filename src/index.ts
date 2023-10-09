@@ -11,13 +11,19 @@ const tryBackup = async () => {
   }
 }
 
-const job = new CronJob(env.BACKUP_CRON_SCHEDULE, async () => {
-  await tryBackup();
-});
-
 if(env.RUN_ON_STARTUP) {
-  tryBackup();
+  console.log("Running backup now...")
+    tryBackup();
 }
-job.start();
 
-console.log("Backup cron scheduled...")
+if (env.BACKUP_CRON_SCHEDULE) {
+  const job = new CronJob(env.BACKUP_CRON_SCHEDULE, async () => {
+    await tryBackup();
+  });
+  job.start();
+  console.log("Backup cron scheduled...")
+} else {
+  console.log("Not scheduling cron.")
+}
+
+console.log("Done!")
